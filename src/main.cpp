@@ -5,8 +5,10 @@
 #include <ESP8266mDNS.h>
 #include <ArduinoWebsockets.h>
 #include <ESP_EEPROM.h>
+#include <Wire.h>
+#include <VL53L1X.h>
 
-#define DEBUG true
+#define DEBUG false
 #define DEBUG_1 true
 
 #define EEPROM_SIZE 512
@@ -15,6 +17,7 @@
 #define END_GPIO 14
 
 #define ONBOARD_LED 2
+
 
 // WiFi and SignalK Connections
 
@@ -59,6 +62,7 @@ double K = 0.0;
 double x_filtered = 0.0;
 double p_computed = 1.0;
 double r_measure = 0.001; 
+double r_process = 0.0001;
 
 
 unsigned int counter = 0;
@@ -78,6 +82,12 @@ int socketState = -4; // -5 does not use WiFi, -4 -> Before connecting to WiFi, 
 String me = "vessels.self";
 char token[256] = "";
 char bigBuffer[1024] = "";
+
+// Laser Sensor
+
+VL53L1X sensor;
+
+bool useLaser = true;   // If true uses LASER else ULTRASOUND
 
 int ledState = 0;
 int ledOn = 0;
@@ -129,7 +139,7 @@ void sendTrigger()
 void kalman_step(double value)
 {
   x_predicted = x_filtered;
-  p_predicted = p_computed;
+  p_predicted = p_computed + r_process;
   K = p_predicted / (p_predicted + r_measure);
   x_filtered = x_predicted + K * (value - x_predicted);
   p_computed = (1.0 - K) * p_predicted;
@@ -206,8 +216,29 @@ void loadEEPROM(){
 void setup() {
 
  Serial.begin(115200);
- pinMode(END_GPIO, INPUT);
- pinMode(TRIGGER_GPIO, OUTPUT);
+
+ if(useLaser){
+  Wire.begin();
+  Wire.setClock(400000);
+  sensor.setBus(&Wire);
+  sensor.setTimeout(500);
+ 
+  if (!sensor.init()) {
+      Serial.println("Failed to detect and initialize sensor!");
+      while (1){
+        delay(1000);
+      }
+            
+  }
+
+  sensor.setMeasurementTimingBudget(200000);
+  sensor.startContinuous(200);
+
+ }else{
+  pinMode(END_GPIO, INPUT);
+  pinMode(TRIGGER_GPIO, OUTPUT);
+
+ }
 
  loadEEPROM();
 
@@ -215,16 +246,33 @@ void setup() {
 
 void loop() {
 
+  char buff[10];
+  double distance = 0.0;
+  
+
   networkTask();
 
-  sendTrigger();
-  long delta = pulseIn(END_GPIO, HIGH);  // Microseconds
+  if (useLaser){
+    uint16 ilaser = sensor.read();    // Measure in mm
+    if(sensor.timeoutOccurred()){
+      distance = -1.0;
+    }else{
+      distance = double(ilaser) / 1000.0; // Compute distance in m
+    }
+  }else{
+    sendTrigger();
+    long delta = pulseIn(END_GPIO, HIGH);  // Microseconds
+    if (delta <= max_height_time){
+      distance = delta * 1e-6 * sound_speed / 2.0;
+    }else{
+      distance = -1.0;
+    }
+  }
+ 
 
 
-  if (delta <= max_height_time || true)
+  if (distance >= 0.0)
   {
-
-    double distance = delta * 1e-6 * sound_speed / 2.0;
     double h = height - distance;
     double t_level = h / height;
 
@@ -232,7 +280,6 @@ void loop() {
     {
       x_predicted = t_level;
       x_filtered = t_level;
-
     }
     else
     {
@@ -241,19 +288,29 @@ void loop() {
 
     counter++;
 
-    if (DEBUG_1 && counter >= 100)
+
+    if (DEBUG_1)
     {
-      Serial.print(t_level);
-      Serial.print(" ");
+
+      if(useLaser){
+        Serial.print("Laser d: ");
+      }else{
+        
+        Serial.print("Ultrasound d: ");
+      
+      }
       Serial.print(distance);
-      Serial.print(" ");
-      Serial.println(x_filtered);
+      Serial.print(" Level: ");
+      Serial.print(t_level);
+      Serial.print("% Filtered: ");
+      Serial.print(x_filtered);
+      Serial.println ("%");
+    }   
+    if(counter >= 10){
       counter = 0;
-      float volume = height * width * length * x_filtered;
+       float volume = height * width * length * x_filtered;
       sendData(x_filtered, volume);
     }
-
   }
-
   delay(1);
 }
