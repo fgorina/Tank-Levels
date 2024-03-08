@@ -62,7 +62,7 @@ double K = 0.0;
 double x_filtered = 0.0;
 double p_computed = 1.0;
 double r_measure = 0.001; 
-double r_process = 0.0001;
+double r_process = 0.00005;
 
 
 unsigned int counter = 0;
@@ -139,7 +139,7 @@ void sendTrigger()
 void kalman_step(double value)
 {
   x_predicted = x_filtered;
-  p_predicted = p_computed + r_process;
+  p_predicted = p_computed ;
   K = p_predicted / (p_predicted + r_measure);
   x_filtered = x_predicted + K * (value - x_predicted);
   p_computed = (1.0 - K) * p_predicted;
@@ -231,8 +231,8 @@ void setup() {
             
   }
 
-  sensor.setMeasurementTimingBudget(200000);
-  sensor.startContinuous(200);
+  sensor.setMeasurementTimingBudget(50000);
+  sensor.startContinuous(50);
 
  }else{
   pinMode(END_GPIO, INPUT);
@@ -246,10 +246,9 @@ void setup() {
 
 void loop() {
 
-  char buff[10];
+
   double distance = 0.0;
   
-
   networkTask();
 
   if (useLaser){
@@ -271,7 +270,7 @@ void loop() {
  
 
 
-  if (distance >= 0.0)
+  if (distance > 0.04 && distance < height)  // Could be 0.04 0r 0.2 depending if Laser of Ultrasound
   {
     double h = height - distance;
     double t_level = h / height;
@@ -304,7 +303,8 @@ void loop() {
       Serial.print(t_level);
       Serial.print("% Filtered: ");
       Serial.print(x_filtered);
-      Serial.println ("%");
+      Serial.print("% P: ");
+      Serial.println(p_computed*10000.0);
     }   
     if(counter >= 10){
       counter = 0;
